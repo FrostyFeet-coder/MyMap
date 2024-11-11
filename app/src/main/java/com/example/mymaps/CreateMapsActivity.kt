@@ -1,10 +1,15 @@
 package com.example.mymaps
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.Location
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
@@ -12,9 +17,12 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.mymaps.Models.Place
 import com.example.mymaps.Models.UserMap
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
@@ -24,6 +32,12 @@ import com.google.android.gms.maps.model.Marker
 import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.material.snackbar.Snackbar
 import com.example.mymaps.databinding.ActivityCreateMapsBinding
+import java.io.File
+import java.io.FileOutputStream
+import java.io.ObjectOutputStream
+
+
+
 
 class CreateMapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
@@ -31,6 +45,12 @@ class CreateMapsActivity : AppCompatActivity(), OnMapReadyCallback {
     private val markers: MutableList<Marker> = mutableListOf()
     private lateinit var mMap: GoogleMap
     private lateinit var binding: ActivityCreateMapsBinding
+    private lateinit var mapTitle: String
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+
+    companion object {
+        private const val LOCATION_PERMISSION_REQUEST_CODE = 1
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,21 +58,24 @@ class CreateMapsActivity : AppCompatActivity(), OnMapReadyCallback {
         binding = ActivityCreateMapsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Retrieve the title from the intent
-        val mapTitle = intent.getStringExtra(EXTRA_MAP_TITLE) ?: "New Map"
+        // Initialize location client
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-        // Set the toolbar title to the map title
+        // Retrieve the title from the intent
+        mapTitle = intent.getStringExtra(EXTRA_MAP_TITLE) ?: "New Map"
+
+        // Set up the toolbar
         val toolbar: Toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true) // Optional: To enable back button
-        supportActionBar?.title = mapTitle // Set the toolbar title to the passed map title
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        supportActionBar?.title = mapTitle
 
-        // Obtain the SupportMapFragment and get notified when the map is ready to be used.
+        // Initialize the map fragment
         val mapFragment = supportFragmentManager
             .findFragmentById(R.id.map) as SupportMapFragment
         mapFragment.getMapAsync(this)
 
-        // Show Snackbar to inform user about adding markers
+        // Show Snackbar for instructions
         mapFragment.view?.let {
             Snackbar.make(it, "Long Press to add marker!", Snackbar.LENGTH_INDEFINITE)
                 .setAction("Ok", {})
@@ -61,58 +84,73 @@ class CreateMapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
     }
 
-    // Inflate the menu to show the "Save" button
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
         menuInflater.inflate(R.menu.menu_create_map, menu)
         return super.onCreateOptionsMenu(menu)
     }
 
-    // Handle action when the "Save" button is clicked
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == R.id.miSave) {
-            println("Tapped on save")
-
-            // Check if there are markers on the map
             if (markers.isEmpty()) {
                 Toast.makeText(this, "There must be at least one marker on the map", Toast.LENGTH_LONG).show()
                 return true
             }
-
-            // Convert markers to Place objects
-            val places = markers.map { marker ->
-                marker.title?.let { title ->
-                    marker.snippet?.let { description ->
-                        Place(title, description, marker.position.latitude, marker.position.longitude)
-                    }
-                }
-            }.filterNotNull() // Remove any null entries from the list
-
-            // Create the UserMap object
-            val userMap = intent.getStringExtra(EXTRA_MAP_TITLE)?.let { UserMap(it, places) }
-
-            // Pass the UserMap back to MainActivity
-            val data = Intent()
-            data.putExtra(EXTRA_USER_MAP, userMap)
-            setResult(Activity.RESULT_OK, data)
-            finish()  // Immediately finish after setting the result
+            saveMapAndFinish()
             return true
         }
         return super.onOptionsItemSelected(item)
     }
 
-    // This callback is triggered when the map is ready to be used
     override fun onMapReady(googleMap: GoogleMap) {
         mMap = googleMap
+
+        // Request location permission and move the camera to the user's location if granted
+        enableMyLocation()
+
         mMap.setOnMapLongClickListener { latLng ->
-            showAlertDialog(latLng)  // Show dialog to add a marker when the user long presses
+            showAlertDialog(latLng)
         }
 
-        // Move the camera to a default location (Delhi in this case)
-        val delhi = LatLng(28.65195, 77.23149)
-        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(delhi, 10f))
+        mMap.setOnInfoWindowClickListener { marker ->
+            showDeleteMarkerDialog(marker)
+        }
     }
 
-    // Show the dialog to add a marker
+    private fun enableMyLocation() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            mMap.isMyLocationEnabled = true
+            getCurrentLocation()
+        } else {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                LOCATION_PERMISSION_REQUEST_CODE
+            )
+        }
+    }
+
+    private fun getCurrentLocation() {
+        fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
+            if (location != null) {
+                val currentLatLng = LatLng(location.latitude, location.longitude)
+                mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 15f))
+            } else {
+                Toast.makeText(this, "Unable to access current location", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == LOCATION_PERMISSION_REQUEST_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                enableMyLocation()
+            } else {
+                Toast.makeText(this, "Location permission is needed to show your location on the map", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun showAlertDialog(latLng: LatLng) {
         val placeFormView = LayoutInflater.from(this).inflate(R.layout.dialog_create_place, null)
         val dialog = AlertDialog.Builder(this)
@@ -130,10 +168,55 @@ class CreateMapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 return@setOnClickListener
             }
 
-            // Add marker to the map
             val marker = mMap.addMarker(MarkerOptions().position(latLng).title(title).snippet(description))
             marker?.let { markers.add(it) }
             dialog.dismiss()
         }
+    }
+
+    private fun showDeleteMarkerDialog(marker: Marker) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete Marker")
+            .setMessage("Are you sure you want to delete this marker?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                // Remove the marker from the list and the map, but do NOT save yet
+                markers.remove(marker)
+                marker.remove()
+                Toast.makeText(this, "Marker deleted", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun saveMapAndFinish() {
+        // Convert markers to Place objects
+        val places = markers.map { marker ->
+            marker.title?.let { title ->
+                marker.snippet?.let { description ->
+                    Place(title, description, marker.position.latitude, marker.position.longitude)
+                }
+            }
+        }.filterNotNull()
+
+        // Create UserMap object with updated list of places
+        val userMap = UserMap(mapTitle, places)
+        val data = Intent()
+        data.putExtra(EXTRA_USER_MAP, userMap)
+        setResult(Activity.RESULT_OK, data)
+
+        finish()  // Finish after setting the result
+    }
+
+    private fun SerializeUserMap(context: Context, userMaps: List<UserMap>) {
+        try {
+            ObjectOutputStream(FileOutputStream(getDataFile(context))).use { it.writeObject(userMaps) }
+            Log.d(TAG, "User maps serialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serializing user maps", e)
+        }
+    }
+
+    private fun getDataFile(context: Context): File {
+        return File(context.filesDir, "usermaps.dat")
     }
 }

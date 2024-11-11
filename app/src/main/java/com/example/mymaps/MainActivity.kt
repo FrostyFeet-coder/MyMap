@@ -2,9 +2,11 @@ package com.example.mymaps
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.widget.EditText
 import android.widget.Toast
@@ -16,10 +18,12 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.mymaps.Models.Place
 import com.example.mymaps.Models.UserMap
-
-import com.example.mymaps.EXTRA_USER_MAP
 import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.MarkerOptions
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,12 +39,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // Set the content view once
+        setContentView(R.layout.activity_main)
 
-        // Initialize rvMaps before accessing it
+        // Initialize RecyclerView
         rvMaps = findViewById(R.id.rvMaps)
 
-        enableEdgeToEdge() // Call enableEdgeToEdge without setting content view again
+        enableEdgeToEdge()
 
         // Apply window insets listener to adjust padding for system bars
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
@@ -49,28 +53,30 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        // Initialize userMaps and generate sample data
-        userMaps = generateSampleData().toMutableList()
+        // Load saved data or generate sample data if no file exists
+        userMaps = deserializeUserMaps(this).toMutableList()
+        if (userMaps.isEmpty()) {
+            userMaps = generateSampleData().toMutableList()
+            // Serialize the sample data for the first time
+            SerializeUserMap(this, userMaps)
+        }
 
         // Initialize the mapAdapter
         mapAdapter = MapsAdapter(this, userMaps, object : MapsAdapter.OnClickListener {
             override fun onItemClick(position: Int) {
-                println("onItemClick $position")
-                // When user taps on view in RV, navigate to new activity
                 val intent = Intent(this@MainActivity, DisplayMapsActivity::class.java)
                 intent.putExtra(EXTRA_USER_MAP, userMaps[position])
                 startActivity(intent)
             }
         })
 
-        // Set layout manager and adapter for rvMaps
+        // Set layout manager and adapter for RecyclerView
         rvMaps.layoutManager = LinearLayoutManager(this)
         rvMaps.adapter = mapAdapter
 
         // Set up FloatingActionButton for creating a new map
         val fabCreateMap = findViewById<com.google.android.material.floatingactionbutton.FloatingActionButton>(R.id.fabCreateMap)
         fabCreateMap.setOnClickListener {
-            println("Tap on FAB")
             showAlertDialog()
         }
     }
@@ -98,25 +104,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Handle activity result to add new map
-// Handle the result after returning from CreateMapsActivity
-// Handle the result after returning from CreateMapsActivity
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUSET_CODE && resultCode == RESULT_OK) {
             val userMap = data?.getSerializableExtra(EXTRA_USER_MAP) as? UserMap
             userMap?.let {
-                // Add the new map to the list
-                userMaps.add(it)
+                // Replace or add the new map data in the list
+                val index = userMaps.indexOfFirst { it.title == userMap.title }
+                if (index >= 0) {
+                    userMaps[index] = userMap
+                } else {
+                    userMaps.add(userMap)
+                }
 
-                // Notify the adapter that a new map has been added
-                mapAdapter.notifyItemInserted(userMaps.size - 1)
+                // Serialize the updated userMaps list
+                SerializeUserMap(this, userMaps)
 
-                // Scroll to the newly added map (optional)
-                rvMaps.scrollToPosition(userMaps.size - 1)
+                // Notify the adapter and update UI
+                mapAdapter.notifyDataSetChanged()
             }
         }
     }
+
+    private fun SerializeUserMap(context: Context, userMaps: List<UserMap>) {
+        try {
+            ObjectOutputStream(FileOutputStream(getDataFile(context))).use { it.writeObject(userMaps) }
+            Log.d("MainActivity", "User maps serialized successfully")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error serializing user maps", e)
+        }
+    }
+
+    private fun deserializeUserMaps(context: Context): List<UserMap> {
+        val dataFile = getDataFile(context)
+        if (!dataFile.exists()) {
+            Log.d("MainActivity", "Data file does not exist, returning empty list")
+            return emptyList()
+        }
+        return try {
+            ObjectInputStream(FileInputStream(dataFile)).use { it.readObject() as List<UserMap> }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error deserializing user maps", e)
+            emptyList()
+        }
+    }
+
+    private fun getDataFile(context: Context): File {
+        return File(context.filesDir, "usermaps.dat")
+    }
+
     private fun generateSampleData(): List<UserMap> {
         return listOf(
             UserMap(
